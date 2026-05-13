@@ -1,0 +1,7 @@
+streamlit>=1.35.0
+mercapi>=0.1.0
+plotly>=5.20.0
+pandas>=2.2.0
+diskcache>=5.6.3
+requests>=2.31.0
+janome>=0.5.0

@@ -1,0 +1,7 @@
+# パスワードが入ってるので絶対にGitHubにあげない
+.streamlit/secrets.toml
+
+# キャッシュ
+.cache/
+__pycache__/
+*.pyc
