@@ -479,8 +479,178 @@ def render_genre_tab() -> None:
                 st.caption("※ メルカリ SOLD 率が高いジャンルを上に表示。Creema/Minne の出品数が少ないほど競合が少ない。")
 
 
+# ─── ライバル調査タブ ─────────────────────────────────────
+def _rival_cache_key(platform: str, keyword: str) -> str:
+    slug = keyword.replace(" ", "_").replace("　", "_")
+    return f"rival_{platform}_{slug}_v1"
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def _rival_fetch(platform: str, keyword: str, _ts: int) -> dict:
+    key = _rival_cache_key(platform, keyword)
+    cached = cache_manager.get(key)
+    if cached is not None:
+        return cached
+    if platform == "mercari":
+        data = mercari_client.search_keyword(keyword)
+    elif platform == "creema":
+        data = creema_client.search_keyword(keyword)
+    else:
+        data = minne_client.search_keyword(keyword)
+    if data.get("items"):
+        cache_manager.set(key, data)
+    return data
+
+
+def _render_action_card(items: list, sold_items: list, keyword: str, platform: str) -> None:
+    st.subheader("💡 おすすめアクション")
+    actions = []
+
+    if sold_items:
+        sold_names = [i["name"] for i in sold_items if i.get("name")]
+        top_kw = extract_top_keywords(sold_names, top_n=5)
+        if top_kw:
+            kws = "、".join([k for k, _ in top_kw[:5]])
+            actions.append(f"**🔑 タイトルに入れると効果的なキーワード：** {kws}")
+
+    if items:
+        prices = [i["price"] for i in items if i.get("price", 0) > 0]
+        if prices:
+            import statistics
+            med = int(statistics.median(prices))
+            p25 = int(sorted(prices)[len(prices) // 4])
+            p75 = int(sorted(prices)[len(prices) * 3 // 4])
+            actions.append(f"**💰 価格スイートスポット：** ¥{p25:,} 〜 ¥{p75:,}（この範囲が一番出品多め）")
+            actions.append(f"**📊 中央値：** ¥{med:,}")
+
+    if sold_items and items:
+        total = len(items) + len(sold_items)
+        rate = round(len(sold_items) / total * 100, 1)
+        actions.append(f"**🛒 SOLD率：** {rate}%（取得{total}件中{len(sold_items)}件がSOLD）")
+
+    if platform in ("creema", "minne"):
+        actions.append(f"**ℹ️ {platform.capitalize()} はSOLDデータ非公開のため出品中のみ表示しています**")
+
+    if not actions:
+        st.info("データが少なくアクションを生成できませんでした。")
+        return
+
+    for a in actions:
+        st.markdown(f"- {a}")
+
+
+def _render_price_diagnosis(items: list, sold_items: list) -> None:
+    st.subheader("💰 値付け診断")
+    all_prices = [i["price"] for i in (items + sold_items) if i.get("price", 0) > 0]
+    if not all_prices:
+        st.info("価格データがありません。")
+        return
+
+    my_price = st.number_input("自分の出品予定価格 (円)", min_value=1, max_value=500000,
+                                value=int(sorted(all_prices)[len(all_prices) // 2]),
+                                step=100, key="price_diagnosis_input")
+
+    cheaper = sum(1 for p in all_prices if p < my_price)
+    pct = round(cheaper / len(all_prices) * 100)
+    med = int(sorted(all_prices)[len(all_prices) // 2])
+    mean_ = int(sum(all_prices) / len(all_prices))
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("中央値", f"¥{med:,}")
+    col2.metric("平均", f"¥{mean_:,}")
+    col3.metric("あなたの価格より安い商品", f"{pct}%")
+
+    if my_price < med * 0.7:
+        st.warning(f"⚠️ 相場より大幅に安い設定です。¥{int(med*0.8):,}〜¥{med:,} あたりが売れやすい価格帯です。")
+    elif my_price > med * 1.5:
+        st.info(f"💎 相場より高めの設定です。品質・差別化ポイントをしっかり伝えましょう。")
+    else:
+        st.success(f"✅ 相場に近い価格です。¥{int(med*0.9):,}〜¥{int(med*1.1):,} が激戦ゾーン。差別化がカギです。")
+
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=all_prices, nbinsx=30, name="出品価格", marker_color="#BDC3C7"))
+    fig.add_vline(x=my_price, line_color="#FF4B4B", line_width=2, annotation_text=f"あなた ¥{my_price:,}", annotation_position="top right")
+    fig.add_vline(x=med, line_color="#2ECC71", line_width=2, line_dash="dash", annotation_text=f"中央値 ¥{med:,}", annotation_position="top left")
+    fig.update_layout(height=300, template="plotly_white", title="価格分布", xaxis_tickprefix="¥", xaxis_tickformat=",")
+    st.plotly_chart(fig, use_container_width=True, key="rival_price_hist")
+
+
+def render_rival_tab() -> None:
+    st.title("🔍 ライバル商品チェック")
+    st.caption("キーワードで検索して、ライバル商品の価格・画像を一覧表示。値付け診断とおすすめアクションも自動生成！")
+
+    kw = st.text_input("🔎 検索キーワード（例：レザー財布、ピアス 花）", key="rival_keyword")
+    platforms = st.multiselect("プラットフォーム", ["メルカリ", "Creema", "Minne"],
+                                default=["メルカリ"], key="rival_platforms")
+    search_btn = st.button("🔍 検索する", type="primary", use_container_width=False, key="rival_search")
+
+    if not kw or not search_btn:
+        st.info("キーワードを入力して「検索する」を押してください。")
+        return
+
+    pmap = {"メルカリ": "mercari", "Creema": "creema", "Minne": "minne"}
+    ts = int(time.time() / 7200)
+
+    all_results = {}
+    for label in platforms:
+        p = pmap[label]
+        with st.spinner(f"{label} 検索中..."):
+            all_results[label] = _rival_fetch(p, kw, ts)
+
+    # プラットフォームごとにタブ表示
+    if len(platforms) == 1:
+        tabs_r = [st.container()]
+        tab_labels = platforms
+    else:
+        tabs_r = st.tabs(platforms)
+        tab_labels = platforms
+
+    for tab_r, label in zip(tabs_r, tab_labels):
+        with tab_r:
+            data = all_results[label]
+            items = data.get("items", [])
+            sold = data.get("sold_items", [])
+            p = pmap[label]
+
+            if not items and not sold:
+                st.warning(f"{label} でデータを取得できませんでした。")
+                continue
+
+            st.caption(f"出品中: {len(items)}件　SOLD: {len(sold)}件")
+            st.markdown("---")
+
+            _render_action_card(items, sold, kw, p)
+            st.markdown("---")
+
+            if items or sold:
+                _render_price_diagnosis(items, sold)
+                st.markdown("---")
+
+            # 商品グリッド
+            st.subheader("🛍️ 商品一覧（価格が安い順）")
+            all_items_disp = sorted(items + sold, key=lambda x: x.get("price", 0))[:24]
+            cols_per_row = 4
+            for row_i in range(math.ceil(len(all_items_disp) / cols_per_row)):
+                cols = st.columns(cols_per_row)
+                for col_idx in range(cols_per_row):
+                    idx = row_i * cols_per_row + col_idx
+                    if idx >= len(all_items_disp):
+                        break
+                    item = all_items_disp[idx]
+                    with cols[col_idx]:
+                        if item.get("image_url"):
+                            st.image(item["image_url"], use_container_width=True)
+                        badge = "🟢SOLD" if item.get("status") == "sold" else ""
+                        st.markdown(
+                            f"{badge} **¥{item.get('price', 0):,}**  \n"
+                            f"[{item.get('name','')[:22]}{'…' if len(item.get('name',''))>22 else ''}]({item.get('url','')})"
+                        )
+
+
 # ─── タブ ────────────────────────────────────────────────
-tab_m, tab_c, tab_minne, tab_genre = st.tabs(["🛍️ メルカリ", "🎨 Creema", "🌸 Minne", "📊 ジャンル調査"])
+tab_m, tab_c, tab_minne, tab_genre, tab_rival = st.tabs(
+    ["🛍️ メルカリ", "🎨 Creema", "🌸 Minne", "📊 ジャンル調査", "🔍 ライバル調査"]
+)
 
 with tab_m:
     render_platform_tab("mercari", "v3", refresh_key, "🧵 メルカリ ハンドメイド売れ筋調査")
@@ -493,3 +663,6 @@ with tab_minne:
 
 with tab_genre:
     render_genre_tab()
+
+with tab_rival:
+    render_rival_tab()

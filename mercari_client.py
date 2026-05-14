@@ -129,3 +129,18 @@ async def _fetch_category_async(category_name: str) -> dict:
 
 def fetch_category(category_name: str) -> dict:
     return asyncio.run(_fetch_category_async(category_name))
+
+
+async def _search_keyword_async(keyword: str, limit: int = 100) -> dict:
+    client = _mercapi.Mercapi()
+    on_sale, sold = await asyncio.gather(
+        _fetch_on_sale(client, keyword),
+        _fetch_sold_items(client, keyword),
+    )
+    for item in on_sale + sold:
+        item["category"] = keyword
+    return {"items": on_sale[:limit], "sold_items": sold[:limit]}
+
+
+def search_keyword(keyword: str, limit: int = 100) -> dict:
+    return asyncio.run(_search_keyword_async(keyword, limit))

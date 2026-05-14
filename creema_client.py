@@ -143,6 +143,44 @@ def fetch_category(category_name: str) -> dict:
     }
 
 
+def search_keyword(keyword: str, limit: int = 100) -> dict:
+    """任意キーワードで検索して出品中アイテムを返す"""
+    _ensure_browser()
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"items": [], "sold_items": []}
+
+    items = []
+    seen: set[str] = set()
+    with sync_playwright() as pw:
+        browser = _launch_browser(pw)
+        ctx = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="ja-JP",
+        )
+        page = ctx.new_page()
+        for pg in range(1, 3):
+            raw = _scrape_page(page, keyword, pg)
+            if not raw:
+                break
+            for item in raw:
+                if item["id"] and item["id"] not in seen:
+                    seen.add(item["id"])
+                    item["category"] = keyword
+                    item["status"] = "on_sale"
+                    items.append(item)
+            time.sleep(PAGE_WAIT_SEC)
+            if len(items) >= limit:
+                break
+        browser.close()
+    return {"items": items[:limit], "sold_items": []}
+
+
 def fetch_all_genre_counts(genre_keywords: dict, progress_callback=None) -> dict:
     """ブラウザ1つで全ジャンルの出品数（1ページ分）を取得して返す"""
     _ensure_browser()
