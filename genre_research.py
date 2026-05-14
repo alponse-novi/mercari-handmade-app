@@ -108,8 +108,7 @@ async def _count(client, keyword: str, sold: bool) -> int:
             )
         else:
             results = await client.search(keyword)
-        raw = await _mc._fetch_pages(results, 200)
-        return len(raw)
+        return results.meta.num_found
     except Exception as e:
         print(f"[genre error] {keyword} sold={sold}: {e}")
         return 0
