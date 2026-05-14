@@ -38,7 +38,14 @@ def _ensure_browser():
 def _launch_browser(pw):
     return pw.chromium.launch(
         headless=True,
-        args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+        args=[
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--no-zygote",
+            "--disable-gpu",
+            "--single-process",
+        ],
     )
 
 

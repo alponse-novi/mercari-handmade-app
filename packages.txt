@@ -13,3 +13,10 @@ libasound2
 libpango-1.0-0
 libcairo2
 libatspi2.0-0
+libx11-6
+libx11-xcb1
+libxcb1
+libxext6
+libxfixes3
+libxi6
+fonts-liberation
