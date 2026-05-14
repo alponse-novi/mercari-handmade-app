@@ -173,3 +173,36 @@ def fetch_category(category_name: str) -> dict:
         "items": all_items[:TARGET_ITEMS],
         "sold_items": [],
     }
+
+
+def fetch_all_genre_counts(genre_keywords: dict, progress_callback=None) -> dict:
+    """ブラウザ1つで全ジャンルの出品数（1ページ分）を取得して返す"""
+    _ensure_browser()
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {}
+
+    results = {}
+    total = len(genre_keywords)
+
+    with sync_playwright() as pw:
+        browser = _launch_browser(pw)
+        ctx = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="ja-JP",
+        )
+        page = ctx.new_page()
+        for i, (genre, keyword) in enumerate(genre_keywords.items()):
+            items = _scrape_page(page, keyword, 1)
+            results[genre] = len(items)
+            if progress_callback:
+                progress_callback((i + 1) / total, genre)
+            time.sleep(PAGE_WAIT_SEC)
+        browser.close()
+
+    return results

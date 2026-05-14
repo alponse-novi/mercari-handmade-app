@@ -4,14 +4,20 @@ import time
 from pathlib import Path
 
 import cache_manager
+import creema_client
+import minne_client
 import mercari_client as _mc  # noqa: F401 — apply httpx patches before mercapi import
 
 import mercapi as _mercapi
 from mercapi.requests import SearchRequestData
 
-GENRE_CACHE_KEY = "genre_stats_v1"
 GENRE_CACHE_TTL = 60 * 60 * 12  # 12時間
-GENRE_LIMIT = 50
+
+CACHE_KEYS = {
+    "mercari": "genre_mercari_v1",
+    "creema":  "genre_creema_v1",
+    "minne":   "genre_minne_v1",
+}
 
 RESEARCH_GENRES = {
     # アクセサリー
@@ -35,12 +41,12 @@ RESEARCH_GENRES = {
     "パスケース":   "パスケース ハンドメイド",
     "スマホケース": "スマホケース ハンドメイド",
     # インテリア・雑貨
-    "キャンドル":       "キャンドル ハンドメイド",
-    "石鹸":             "石鹸 ハンドメイド",
-    "ドライフラワー":   "ドライフラワー ハンドメイド",
-    "リース":           "リース ハンドメイド",
-    "アロマ":           "アロマ ハンドメイド",
-    "タペストリー":     "タペストリー ハンドメイド",
+    "キャンドル":     "キャンドル ハンドメイド",
+    "石鹸":           "石鹸 ハンドメイド",
+    "ドライフラワー": "ドライフラワー ハンドメイド",
+    "リース":         "リース ハンドメイド",
+    "アロマ":         "アロマ ハンドメイド",
+    "タペストリー":   "タペストリー ハンドメイド",
     # ファッション
     "子供服":   "子供服 ハンドメイド",
     "帽子":     "帽子 ハンドメイド",
@@ -48,21 +54,23 @@ RESEARCH_GENRES = {
     "マスク":   "マスク ハンドメイド",
     "ヘアバンド": "ヘアバンド ハンドメイド",
     # クラフト
-    "刺繍":       "刺繍 ハンドメイド",
-    "編み物":     "編み物 ハンドメイド",
-    "レジン":     "レジン ハンドメイド",
-    "レザー":     "レザー ハンドメイド",
-    "ぬいぐるみ": "ぬいぐるみ ハンドメイド",
+    "刺繍":         "刺繍 ハンドメイド",
+    "編み物":       "編み物 ハンドメイド",
+    "レジン":       "レジン ハンドメイド",
+    "レザー":       "レザー ハンドメイド",
+    "ぬいぐるみ":   "ぬいぐるみ ハンドメイド",
     "羊毛フェルト": "羊毛フェルト ハンドメイド",
-    "ビーズ":     "ビーズ ハンドメイド",
+    "ビーズ":       "ビーズ ハンドメイド",
     # ペット
     "ペット用品": "ペット ハンドメイド",
     "ペット服":   "犬服 ハンドメイド",
 }
 
 
-def get_cached() -> dict | None:
-    path = cache_manager._cache_path(GENRE_CACHE_KEY)
+# ─── キャッシュ操作 ───────────────────────────────────────
+
+def _get_cached(cache_key: str) -> dict | None:
+    path = cache_manager._cache_path(cache_key)
     if not path.exists():
         return None
     try:
@@ -75,9 +83,21 @@ def get_cached() -> dict | None:
         return None
 
 
-def last_updated() -> float | None:
-    return cache_manager.last_updated(GENRE_CACHE_KEY)
+def _save_cache(cache_key: str, data: dict) -> None:
+    path = cache_manager._cache_path(cache_key)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"timestamp": time.time(), "data": data}, f, ensure_ascii=False)
 
+
+def last_updated(platform: str) -> float | None:
+    return cache_manager.last_updated(CACHE_KEYS[platform])
+
+
+def get_cached(platform: str) -> dict | None:
+    return _get_cached(CACHE_KEYS[platform])
+
+
+# ─── メルカリ取得（async）────────────────────────────────
 
 async def _count(client, keyword: str, sold: bool) -> int:
     try:
@@ -94,7 +114,7 @@ async def _count(client, keyword: str, sold: bool) -> int:
         return 0
 
 
-async def _fetch_all_async(progress_callback=None) -> dict:
+async def _fetch_mercari_async(progress_callback=None) -> dict:
     client = _mercapi.Mercapi()
     sem = asyncio.Semaphore(3)
     genres = list(RESEARCH_GENRES.items())
@@ -119,15 +139,37 @@ async def _fetch_all_async(progress_callback=None) -> dict:
     return {g: d for r in results if isinstance(r, tuple) for g, d in [r]}
 
 
-def fetch_genre_stats(force: bool = False, progress_callback=None) -> dict | None:
+# ─── 各プラットフォームの取得 ─────────────────────────────
+
+def fetch_genre_stats(platform: str, force: bool = False, progress_callback=None) -> dict | None:
+    """
+    Args:
+        platform: "mercari" | "creema" | "minne"
+    Returns:
+        {genre: {"on_sale": int, "sold": int}}
+        sold は mercari のみ有効。creema/minne は常に 0。
+    """
+    cache_key = CACHE_KEYS[platform]
+
     if not force:
-        cached = get_cached()
+        cached = _get_cached(cache_key)
         if cached is not None:
             return cached
 
-    stats = asyncio.run(_fetch_all_async(progress_callback))
+    if platform == "mercari":
+        stats = asyncio.run(_fetch_mercari_async(progress_callback))
+
+    elif platform == "creema":
+        counts = creema_client.fetch_all_genre_counts(RESEARCH_GENRES, progress_callback)
+        stats = {g: {"on_sale": c, "sold": 0} for g, c in counts.items()}
+
+    elif platform == "minne":
+        counts = minne_client.fetch_all_genre_counts(RESEARCH_GENRES, progress_callback)
+        stats = {g: {"on_sale": c, "sold": 0} for g, c in counts.items()}
+
+    else:
+        return None
+
     if stats:
-        path = cache_manager._cache_path(GENRE_CACHE_KEY)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"timestamp": time.time(), "data": stats}, f, ensure_ascii=False)
+        _save_cache(cache_key, stats)
     return stats or None
