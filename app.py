@@ -130,7 +130,7 @@ def render_summary_cards(df: pd.DataFrame, sold_df: pd.DataFrame) -> None:
         c6.metric("平均価格", f"¥{int(df['price'].mean()):,}")
 
 
-def render_price_charts(df: pd.DataFrame) -> None:
+def render_price_charts(df: pd.DataFrame, platform: str = "") -> None:
     if df.empty:
         return
     col_left, col_right = st.columns(2)
@@ -144,7 +144,7 @@ def render_price_charts(df: pd.DataFrame) -> None:
         )
         fig.update_layout(showlegend=False, height=380)
         fig.update_yaxes(tickformat=",.0f", tickprefix="¥")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"price_box_{platform}")
     with col_right:
         st.subheader("📈 カテゴリー別 平均・中央値")
         agg = (
@@ -158,7 +158,7 @@ def render_price_charts(df: pd.DataFrame) -> None:
         fig2.add_trace(go.Bar(y=agg["category"], x=agg["中央値"], name="中央値", orientation="h", marker_color="#F0A500"))
         fig2.update_layout(barmode="group", height=380, template="plotly_white",
                            xaxis=dict(tickformat=",.0f", tickprefix="¥"))
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, use_container_width=True, key=f"price_bar_{platform}")
 
 
 def render_sold_analysis(platform: str, ver: str) -> None:
@@ -185,7 +185,7 @@ def render_sold_analysis(platform: str, ver: str) -> None:
         fig.add_trace(go.Bar(y=ss["カテゴリー"], x=ss["出品中(取得)"], name="出品中", orientation="h", marker_color="#BDC3C7"))
         fig.update_layout(barmode="group", height=350, template="plotly_white",
                           title="SOLD数 vs 出品中数 (各最大200件取得)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"sold_bar_{platform}")
     with sc2:
         fig2 = go.Figure()
         for _, row in ss.iterrows():
@@ -200,7 +200,7 @@ def render_sold_analysis(platform: str, ver: str) -> None:
         fig2.update_layout(barmode="stack", height=350, template="plotly_white",
                            title="SOLD比率 (取得件数ベース)",
                            xaxis=dict(ticksuffix="%", range=[0, 100]))
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, use_container_width=True, key=f"sold_stack_{platform}")
 
     st.dataframe(ss.sort_values("SOLD数(取得)", ascending=False).reset_index(drop=True),
                  use_container_width=True)
@@ -237,7 +237,7 @@ def render_keyword_analysis(all_sold_items: list, platform: str) -> None:
                      template="plotly_white", title="頻出キーワード Top20")
         fig.update_layout(height=550, yaxis=dict(autorange="reversed"))
         fig.update_coloraxes(showscale=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"kw_bar_{platform}")
     with kw_col2:
         st.markdown("**Top100 一覧**")
         st.dataframe(kw_df, use_container_width=True, height=540,
@@ -305,7 +305,7 @@ def render_platform_tab(platform: str, ver: str, refresh_key: int, title: str) -
 
     render_summary_cards(df, sold_df_raw)
     st.markdown("---")
-    render_price_charts(df)
+    render_price_charts(df, platform)
     st.markdown("---")
     render_sold_analysis(platform, ver)
     st.markdown("---")
@@ -349,12 +349,12 @@ def _genre_fetch_section(platform: str, label: str, wait_msg: str) -> dict | Non
     return genre_research.get_cached(platform)
 
 
-def _genre_listing_chart(stats: dict, title: str, color: str) -> None:
+def _genre_listing_chart(stats: dict, title: str, color: str, key: str) -> None:
     rows = [{"ジャンル": g, "出品数(取得)": d.get("on_sale", 0)} for g, d in stats.items()]
     df = pd.DataFrame(rows).sort_values("出品数(取得)", ascending=True)
     fig = go.Figure(go.Bar(x=df["出品数(取得)"], y=df["ジャンル"], orientation="h", marker_color=color))
     fig.update_layout(height=700, template="plotly_white", title=title)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=key)
     st.caption("※ 各ジャンル1ページ分（目安30〜60件）の取得データです。")
 
 
@@ -372,19 +372,19 @@ def _genre_mercari_full(stats: dict) -> None:
         top = df.sort_values("SOLD数(取得)", ascending=True)
         fig = go.Figure(go.Bar(x=top["SOLD数(取得)"], y=top["ジャンル"], orientation="h", marker_color="#2ECC71"))
         fig.update_layout(height=700, template="plotly_white", title="SOLD数ランキング")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="genre_m_sold")
     with rt2:
         top = df.sort_values("出品数(取得)", ascending=True)
         fig = go.Figure(go.Bar(x=top["出品数(取得)"], y=top["ジャンル"], orientation="h", marker_color="#FF4B4B"))
         fig.update_layout(height=700, template="plotly_white", title="出品数ランキング")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="genre_m_listing")
     with rt3:
         top = df.sort_values("SOLD率(%)", ascending=True)
         fig = go.Figure(go.Bar(x=top["SOLD率(%)"], y=top["ジャンル"], orientation="h", marker_color="#F0A500",
                                text=top["SOLD率(%)"].astype(str) + "%", textposition="outside"))
         fig.update_layout(height=700, template="plotly_white", title="SOLD率ランキング",
                           xaxis=dict(ticksuffix="%", range=[0, 100]))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="genre_m_sold_rate")
 
     st.markdown("---")
     st.subheader("💡 チャンスジャンル（メルカリ）")
@@ -424,7 +424,7 @@ def render_genre_tab() -> None:
         if stats_c is None:
             st.info("「Creema 取得・更新」ボタンを押してください。Playwright で39ジャンルを取得します（約2〜4分）。")
         else:
-            _genre_listing_chart(stats_c, "Creema 出品数ランキング", "#FF6B9D")
+            _genre_listing_chart(stats_c, "Creema 出品数ランキング", "#FF6B9D", key="genre_c_listing")
             st.markdown("---")
             rows_c = [{"ジャンル": g, "出品数(取得)": d.get("on_sale", 0)} for g, d in stats_c.items()]
             st.dataframe(pd.DataFrame(rows_c).sort_values("出品数(取得)", ascending=False).reset_index(drop=True), use_container_width=True)
@@ -434,7 +434,7 @@ def render_genre_tab() -> None:
         if stats_n is None:
             st.info("「Minne 取得・更新」ボタンを押してください。Playwright で39ジャンルを取得します（約2〜4分）。")
         else:
-            _genre_listing_chart(stats_n, "Minne 出品数ランキング", "#FF8C42")
+            _genre_listing_chart(stats_n, "Minne 出品数ランキング", "#FF8C42", key="genre_n_listing")
             st.markdown("---")
             rows_n = [{"ジャンル": g, "出品数(取得)": d.get("on_sale", 0)} for g, d in stats_n.items()]
             st.dataframe(pd.DataFrame(rows_n).sort_values("出品数(取得)", ascending=False).reset_index(drop=True), use_container_width=True)
@@ -455,7 +455,7 @@ def render_genre_tab() -> None:
                 fig_cmp.add_trace(go.Bar(name=labels[p], x=genres, y=vals, marker_color=colors[p]))
             fig_cmp.update_layout(barmode="group", height=500, template="plotly_white",
                                   title="ジャンル別 出品数 3社比較", xaxis_tickangle=-45)
-            st.plotly_chart(fig_cmp, use_container_width=True)
+            st.plotly_chart(fig_cmp, use_container_width=True, key="genre_cmp_bar")
 
             if "mercari" in avail:
                 st.markdown("---")
