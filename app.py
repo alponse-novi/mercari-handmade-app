@@ -7,6 +7,7 @@ import streamlit as st
 
 import cache_manager
 import creema_client
+import genre_research
 import mercari_client
 import minne_client
 from keywords import extract_top_keywords
@@ -324,8 +325,107 @@ if force_refresh:
 
 refresh_key = int(time.time() / 7200)
 
+# ─── ジャンル調査タブ ─────────────────────────────────────
+def render_genre_tab() -> None:
+    st.title("📊 ハンドメイド ジャンル市場調査")
+    st.caption("メルカリのデータをもとに、各ジャンルの出品数・SOLD数・SOLD率をランキング表示します（各最大50件取得）。")
+
+    col_btn, col_info = st.columns([1, 4])
+    with col_btn:
+        do_refresh = st.button("🔍 データ取得・更新", use_container_width=True, type="primary")
+    with col_info:
+        ts = genre_research.last_updated()
+        if ts:
+            minutes_ago = int((time.time() - ts) / 60)
+            lbl = f"{minutes_ago}分前" if minutes_ago < 60 else f"{int(minutes_ago/60)}時間前"
+            st.caption(f"最終更新: {lbl}　（キャッシュ有効期限: 12時間）")
+        else:
+            st.caption("未取得　→「データ取得・更新」を押してください")
+
+    stats = None
+    if do_refresh:
+        prog = st.progress(0, text="ジャンルデータ取得中...")
+        def _cb(pct, genre):
+            prog.progress(pct, text=f"{genre} 取得中... ({int(pct * 100)}%)")
+        stats = genre_research.fetch_genre_stats(force=True, progress_callback=_cb)
+        prog.empty()
+    else:
+        stats = genre_research.get_cached()
+
+    if stats is None:
+        st.info("「データ取得・更新」ボタンを押すと分析を開始します。39ジャンル分のデータ取得に1〜2分かかります。")
+        return
+
+    rows = []
+    for g, d in stats.items():
+        on_sale = d.get("on_sale", 0)
+        sold = d.get("sold", 0)
+        total = on_sale + sold
+        sold_rate = round(sold / total * 100, 1) if total > 0 else 0.0
+        rows.append({"ジャンル": g, "出品数(取得)": on_sale, "SOLD数(取得)": sold, "SOLD率(%)": sold_rate})
+    df = pd.DataFrame(rows)
+
+    # ─── ランキングチャート
+    rank_tab1, rank_tab2, rank_tab3 = st.tabs(["🟢 SOLD数ランキング", "🔴 出品数ランキング", "🟡 SOLD率ランキング"])
+
+    with rank_tab1:
+        top = df.sort_values("SOLD数(取得)", ascending=True)
+        fig = go.Figure(go.Bar(
+            x=top["SOLD数(取得)"], y=top["ジャンル"], orientation="h", marker_color="#2ECC71",
+        ))
+        fig.update_layout(height=700, template="plotly_white", title="SOLD数ランキング（全ジャンル）")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with rank_tab2:
+        top = df.sort_values("出品数(取得)", ascending=True)
+        fig = go.Figure(go.Bar(
+            x=top["出品数(取得)"], y=top["ジャンル"], orientation="h", marker_color="#FF4B4B",
+        ))
+        fig.update_layout(height=700, template="plotly_white", title="出品数ランキング（全ジャンル）")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with rank_tab3:
+        top = df.sort_values("SOLD率(%)", ascending=True)
+        fig = go.Figure(go.Bar(
+            x=top["SOLD率(%)"], y=top["ジャンル"], orientation="h", marker_color="#F0A500",
+            text=top["SOLD率(%)"].astype(str) + "%", textposition="outside",
+        ))
+        fig.update_layout(height=700, template="plotly_white", title="SOLD率ランキング（全ジャンル）",
+                          xaxis=dict(ticksuffix="%", range=[0, 100]))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ─── チャンスジャンル
+    st.markdown("---")
+    st.subheader("💡 チャンスジャンル")
+    st.caption("SOLD率が中央値以上 かつ 出品数が中央値以下 = 需要あり・競合少なめ")
+    med_rate = df["SOLD率(%)"].median()
+    med_sale = df["出品数(取得)"].median()
+    opp = df[(df["SOLD率(%)"] >= med_rate) & (df["出品数(取得)"] <= med_sale)].sort_values("SOLD率(%)", ascending=False).reset_index(drop=True)
+    if opp.empty:
+        st.info("条件に合うジャンルが見つかりませんでした。")
+    else:
+        st.dataframe(
+            opp, use_container_width=True,
+            column_config={
+                "SOLD率(%)": st.column_config.ProgressColumn("SOLD率(%)", min_value=0, max_value=100, format="%.1f%%"),
+            },
+        )
+
+    # ─── 全ジャンル詳細テーブル
+    st.markdown("---")
+    st.subheader("📋 全ジャンル詳細")
+    st.dataframe(
+        df.sort_values("SOLD率(%)", ascending=False).reset_index(drop=True),
+        use_container_width=True,
+        column_config={
+            "SOLD率(%)": st.column_config.ProgressColumn("SOLD率(%)", min_value=0, max_value=100, format="%.1f%%"),
+        },
+    )
+    st.caption("※ 各ジャンル最大50件取得のデータです。実際の市場規模とは異なります。")
+
+
 # ─── タブ ────────────────────────────────────────────────
-tab_m, tab_c, tab_minne = st.tabs(["🛍️ メルカリ", "🎨 Creema", "🌸 Minne"])
+tab_m, tab_c, tab_minne, tab_genre = st.tabs(["🛍️ メルカリ", "🎨 Creema", "🌸 Minne", "📊 ジャンル調査"])
 
 with tab_m:
     render_platform_tab("mercari", "v3", refresh_key, "🧵 メルカリ ハンドメイド売れ筋調査")
@@ -335,3 +435,6 @@ with tab_c:
 
 with tab_minne:
     render_platform_tab("minne", "v1", refresh_key, "🌸 Minne ハンドメイド売れ筋調査")
+
+with tab_genre:
+    render_genre_tab()
